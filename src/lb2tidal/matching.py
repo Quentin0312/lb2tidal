@@ -26,6 +26,15 @@ NOISE_MARKERS: tuple[str, ...] = (
     "(ft.",
     " feat. ",
     " ft. ",
+    # Soundtrack tagging: Tidal appends the show, ListenBrainz does not.
+    "(from the",
+    "(from ",
+    # Phonk/edit variants, which both sides label inconsistently.
+    "(slowed",
+    "- slowed",
+    "(sped up",
+    "- sped up",
+    "(reverb",
 )
 
 
@@ -61,6 +70,27 @@ def _ratio(left: str, right: str) -> float:
     return SequenceMatcher(None, left, right).ratio()
 
 
+def artist_similarity(candidate_norm: str, query_norm: str) -> float:
+    """Similarity of two normalised artist strings, tolerant of dropped collaborators.
+
+    ListenBrainz credits every artist (``JID & Kenny Mason``) where Tidal often
+    lists only the principal (``JID``). Plain string similarity scores that pair
+    at 0.33 — no better than two unrelated artists who happen to share a song
+    title. So when one set of words contains the other, the artists are treated
+    as the same. That is what separates a dropped collaborator from a homonym:
+    ``{jid} <= {jid, kenny, mason}`` holds, ``{technicolor, stew}`` against
+    ``{denzel, curry, gizzle, bren, joy}`` does not.
+    """
+    if not candidate_norm or not query_norm:
+        return _ratio(candidate_norm, query_norm)
+
+    candidate_words = set(candidate_norm.split())
+    query_words = set(query_norm.split())
+    if candidate_words <= query_words or query_words <= candidate_words:
+        return 1.0
+    return _ratio(candidate_norm, query_norm)
+
+
 def score(
     candidate: Candidate,
     artist_norm: str,
@@ -68,7 +98,7 @@ def score(
     artist_weight: float,
 ) -> float:
     """Weighted similarity of a candidate against pre-normalised query terms."""
-    artist = _ratio(normalise(candidate.artist), artist_norm)
+    artist = artist_similarity(normalise(candidate.artist), artist_norm)
     title = _ratio(normalise(candidate.title), title_norm)
     return artist_weight * artist + (1.0 - artist_weight) * title
 

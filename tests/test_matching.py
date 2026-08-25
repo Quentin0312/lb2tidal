@@ -12,7 +12,7 @@ import pytest
 
 from lb2tidal.matching import Candidate, best_match, normalise
 
-THRESHOLD = 0.62
+THRESHOLD = 0.80
 ARTIST_WEIGHT = 0.4
 
 CORPUS = Path(__file__).parent / "corpus.csv"
@@ -75,6 +75,9 @@ def test_normalise(raw: str | None, expected: str) -> None:
         # ListenBrainz emits credits unparenthesised; this is the real-world form.
         ("Apashe feat. Alina Pash", "apashe"),
         ("Artist ft. Guest", "artist"),
+        ("Sucker (from the series Arcane League of Legends)", "sucker"),
+        ("NO BATIDAO - Slowed", "no batidao"),
+        ("Song (Slowed + Reverb)", "song"),
     ],
 )
 def test_normalise_strips_noise_markers(raw: str, expected: str) -> None:
@@ -103,11 +106,8 @@ def test_corpus(
         assert result is not None, f"{lb_artist} — {lb_title} should match {cand_title!r}"
     elif kind == "reject":
         assert result is None, f"{lb_artist} — {lb_title} should NOT match {cand_title!r}"
-    else:  # xfail: a known false positive at the current, uncalibrated defaults
-        pytest.xfail(
-            f"{lb_artist} — {lb_title} wrongly matches {cand_artist} — {cand_title} "
-            "at the inherited defaults (see M4)"
-        )
+    else:
+        raise AssertionError(f"unknown corpus kind {kind!r}")
 
 
 # --- selection, determinism, tie-breaking ---------------------------------
@@ -158,3 +158,41 @@ def test_threshold_of_one_rejects_near_misses() -> None:
 def test_artist_weight_of_zero_ignores_the_artist() -> None:
     candidates = [Candidate(id=1, artist="Completely Different", title="Creep")]
     assert best_match(candidates, "Radiohead", "Creep", THRESHOLD, 0.0) is not None
+
+
+# --- artist similarity: dropped collaborators vs homonyms ------------------
+
+
+@pytest.mark.parametrize(
+    ("listenbrainz_artist", "tidal_artist", "same"),
+    [
+        # Tidal drops collaborators; ListenBrainz lists them all.
+        ("JID & Kenny Mason", "JID", True),
+        ("Skrillex, Missy Elliott & Mr. Oizo", "Skrillex", True),
+        ("Angèle & Roméo Elvis", "Angèle", True),
+        ("Denzel Curry, Gizzle & Bren Joy", "Denzel Curry", True),
+        # Unrelated artists who merely share a song title must stay apart.
+        ("Denzel Curry, Gizzle & Bren Joy", "technicolor STEW", False),
+        ("Marcus King", "Nicolas Julian", False),
+        ("Nirvana", "Evanescence", False),
+    ],
+)
+def test_artist_similarity(listenbrainz_artist: str, tidal_artist: str, same: bool) -> None:
+    from lb2tidal.matching import artist_similarity
+
+    got = artist_similarity(normalise(tidal_artist), normalise(listenbrainz_artist))
+    if same:
+        assert got == 1.0
+    else:
+        assert got < 0.6
+
+
+def test_homonym_is_rejected_at_the_default_threshold() -> None:
+    """A shared title must not carry an unrelated artist over the line."""
+    candidates = [Candidate(id=1, artist="Evanescence", title="Lithium")]
+    assert best_match(candidates, "Nirvana", "Lithium", THRESHOLD, ARTIST_WEIGHT) is None
+
+
+def test_dropped_collaborator_still_matches() -> None:
+    candidates = [Candidate(id=1, artist="JID", title="Dance Now")]
+    assert best_match(candidates, "JID & Kenny Mason", "Dance Now", THRESHOLD, ARTIST_WEIGHT)

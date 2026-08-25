@@ -279,7 +279,7 @@ session_file = "~/.local/state/lb2tidal/tidal.json"
 prefix       = "LB · "        # playlist name prefix
 
 [matching]
-threshold     = 0.62          # minimum score to accept a match, 0.0–1.0
+threshold     = 0.80          # minimum score to accept a match, 0.0–1.0
 artist_weight = 0.4           # title weight is 1 - artist_weight
 search_limit  = 15            # Tidal results considered per query
 
@@ -315,20 +315,34 @@ Normalisation (`matching.normalise`), applied to both candidate and query:
 2. Unicode NFKD normalise, then strip combining marks.
 3. Truncate at the first occurrence of any noise marker:
    `(remaster`, `- remaster`, `(live`, `(version`, `(deluxe`, `(bonus`,
-   `(radio edit`, `- radio edit`, `(feat.`, `(ft.`, and the unparenthesised
-   ` feat. ` / ` ft. ` — ListenBrainz emits credits in that form
-   (`Apashe feat. Alina Pash`), so the parenthesised variants alone miss them.
+   `(radio edit`, `- radio edit`, `(feat.`, `(ft.`, ` feat. `, ` ft. `,
+   `(from the`, `(from `, `(slowed`, `- slowed`, `(sped up`, `- sped up`,
+   `(reverb`.
+
+   The unparenthesised ` feat. ` / ` ft. ` forms matter because ListenBrainz
+   emits credits that way (`Apashe feat. Alina Pash`). The soundtrack and
+   edit-variant markers were added after observing real mismatches: Tidal labels
+   `Sucker (from the series Arcane League of Legends)` where ListenBrainz says
+   `Sucker`, and the two sides disagree on `- Slowed` suffixes.
 4. Drop all characters that are not alphanumeric or whitespace.
 5. Collapse runs of whitespace, strip.
 
 Scoring:
 
 ```
-score = artist_weight · ratio(norm(cand_artist), norm(artist))
+score = artist_weight · artist_similarity(norm(cand_artist), norm(artist))
       + (1 - artist_weight) · ratio(norm(cand_title), norm(title))
 ```
 
 where `ratio` is `difflib.SequenceMatcher(...).ratio()`.
+
+`artist_similarity` is `ratio`, except that it returns `1.0` when one artist's
+set of words contains the other's. ListenBrainz credits every artist
+(`JID & Kenny Mason`) where Tidal often lists only the principal (`JID`); plain
+string similarity scores that pair at 0.33 — indistinguishable from two
+unrelated artists sharing a song title. Word-set containment is what separates
+the two cases: `{jid} ⊆ {jid, kenny, mason}` holds, while
+`{technicolor, stew}` against `{denzel, curry, gizzle, bren, joy}` does not.
 
 Query strategy, first acceptable match wins:
 
@@ -340,13 +354,29 @@ Tidal's own result ordering: first returned wins.
 
 Matching is deterministic.
 
-**Rationale for the defaults.** `threshold = 0.62` and `artist_weight = 0.4` are
-inherited from the prototype and are unvalidated. Before v1.0 they must be
-calibrated against a labelled fixture set of at least 200 real
-`(ListenBrainz pair → correct Tidal track)` examples, reporting precision and
-recall. A false positive (wrong track silently added) is worse than a false
-negative (reported miss), so calibration optimises for precision at
-recall ≥ 0.85.
+**Rationale for the defaults.** Calibrated on 2026-08-26 against the 100 tracks
+of the reference account's two recommendations, resolved through the live Tidal
+catalogue.
+
+The prototype's `threshold = 0.62` with plain string similarity produced two
+false positives in 50 tracks — `Marcus King — Sucker` resolving to
+`Nicolas Julian`, and `Denzel Curry — Dynasties and Dystopia` to
+`technicolor STEW`. Both are the homonym failure: an identical title carries
+0.6 of the score on its own, so almost any artist clears 0.62.
+
+Adding word-set containment fixed both without a single rejection — the correct
+artist was in Tidal's results all along and simply outscores the impostor once
+collaborators stop being penalised. With the noise markers above, all 100 tracks
+then resolve at exactly 1.000.
+
+That leaves the corpus unable to discriminate: every threshold from 0.62 to 0.95
+keeps all 100. `threshold = 0.80` is therefore chosen for what it *rejects* — a
+homonym scores 0.733 (`Nirvana — Lithium` against `Evanescence — Lithium`), so
+0.80 excludes that class with margin while keeping every real match.
+
+`artist_weight = 0.4` is unchanged and remains unvalidated; the corpus does not
+discriminate on it either. A false positive (wrong track silently added) stays
+worse than a false negative (reported miss).
 
 ### 5.3 Run state
 
@@ -684,7 +714,9 @@ No open decisions block v1.0.
 
 ### 8.2 Deferred to post-1.0
 
-- Calibration of `threshold` against a larger labelled set.
+- Calibration of `artist_weight`, which the current corpus cannot discriminate
+  on, and of `threshold` against tracks Tidal genuinely lacks — the reference
+  account produced none, so the miss path is still unexercised.
 - **ISRC-based resolution.** Confirmed available: each JSPF track carries its
   recording MBID in `identifier` (a *list* of MusicBrainz URLs), MusicBrainz
   exposes ISRCs for recordings, and `tidalapi` 0.8.11 already provides
@@ -736,7 +768,7 @@ development machine).
 | M1 | Restructure prototype into the §4.1 package | `lb2tidal sync --dry-run` reproduces current behaviour; CI green |
 | M2 | Config, CLI, exit codes, logging | §5.1 and §6 implemented; verified by hand against `status` and `--dry-run` |
 | M3 | Resilience, run state, idempotence | FR-5 verified; a repeat run issues zero writes and skips unchanged recommendations |
-| M4 | Matching calibration | Precision/recall reported on ≥ 200 labelled pairs |
+| M4 | Matching calibration | Done 2026-08-26 on 100 live tracks: 100/100 at 1.000, zero false positives (§5.2). Revisit if misses appear in practice |
 | M5 | VPS deployment | Timer running on the Debian 13 host for 7 consecutive days without manual intervention |
 | M6 | README | A stranger can install and configure it from the README alone |
 

@@ -2,9 +2,9 @@
 #
 # kind      = match  -> the candidate is the correct track, must score >= threshold
 #             reject -> the candidate is the wrong track, must score <  threshold
-#             xfail  -> SHOULD be rejected but is not, at the current defaults.
-#                       A known false positive, kept as a standing reminder that
-#                       threshold/artist_weight are uncalibrated (M4).
+#
+# Cases marked (real) were observed against the live Tidal catalogue on
+# 2026-08-26 while calibrating on 100 tracks from the reference account.
 # lb_artist , lb_title    = what ListenBrainz gives us
 # cand_*                  = what Tidal returned
 kind,lb_artist,lb_title,cand_artist,cand_title
@@ -26,6 +26,16 @@ match,Mötley Crüe,Kickstart My Heart,Motley Crue,Kickstart My Heart
 match,宇多田ヒカル,First Love,宇多田ヒカル,First Love
 reject,Korn,Coming Undone,Linkin Park,Numb
 reject,Daft Punk,One More Time,Daft Punk,Harder Better Faster Stronger
-xfail,Nirvana,Lithium,Evanescence,Lithium
+reject,Nirvana,Lithium,Evanescence,Lithium
 reject,The Beatles,Yesterday,The Rolling Stones,Yesterday's Papers
 reject,Metallica,One,U2,One
+match,JID & Kenny Mason,Dance Now,JID,Dance Now
+match,Angèle & Roméo Elvis,Tout oublier,Angèle,Tout oublier
+match,"Skrillex, Missy Elliott & Mr. Oizo",RATATA,Skrillex,RATATA
+match,1nonly & Freddie Dredd,GRAILED,1nonly,GRAILED
+match,Marcus King,Sucker,Marcus King,Sucker (from the series Arcane League of Legends)
+match,"Denzel Curry, Gizzle & Bren Joy",Dynasties and Dystopia,Denzel Curry,Dynasties and Dystopia (from the series Arcane League of Legends)
+match,ZXKAI,NO BATIDÃO - Slowed,ZXKAI,NO BATIDÃO
+match,Subtronics × REZZ,Black Ice,Subtronics,Black Ice (feat. Phantogram)
+reject,Marcus King,Sucker,Nicolas Julian,Sucker
+reject,"Denzel Curry, Gizzle & Bren Joy",Dynasties and Dystopia,technicolor STEW,Dynasties and Dystopia

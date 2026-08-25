@@ -71,7 +71,7 @@ class TidalConfig:
 
 @dataclass
 class MatchingConfig:
-    threshold: float = 0.62
+    threshold: float = 0.80
     artist_weight: float = 0.4
     search_limit: int = 15
 
