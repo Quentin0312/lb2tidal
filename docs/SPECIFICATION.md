@@ -129,10 +129,15 @@ Linux (Python 3.13), on `x86_64` and `aarch64`. No compiled extensions of our ow
 
 ### 4.1 Repository layout
 
+Standard `src` layout: the repository root and the importable package share the
+name, but only `src/lb2tidal/` is on `sys.path` once installed. This keeps the
+working tree off `sys.path`, so an import always resolves the installed package
+— a file missing from the wheel fails immediately instead of after `pipx install`.
+
 ```
-lb2tidal/
+lb2tidal/                      # repository root
 ├── src/
-│   └── lb2tidal/
+│   └── lb2tidal/              # the importable package
 │       ├── __init__.py        # __version__
 │       ├── __main__.py        # python -m lb2tidal
 │       ├── cli.py             # argparse, subcommands, exit codes
