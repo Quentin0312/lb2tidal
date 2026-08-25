@@ -525,14 +525,19 @@ timestamp. Makes no writes.
 
 ### 6.4 Exit codes
 
-| Code | Meaning |
-|---|---|
-| `0` | All configured recommendations synced successfully (or already up to date) |
-| `1` | At least one recommendation failed; at least one succeeded |
-| `2` | Configuration error — nothing was attempted |
-| `3` | Tidal authentication missing or expired — run `lb2tidal login` |
-| `4` | All recommendations failed |
-| `130` | Interrupted (SIGINT) |
+| Code | Commands | Meaning |
+|---|---|---|
+| `0` | all | Success. For `sync`: every configured recommendation synced, skipped, or already up to date |
+| `1` | `sync` | At least one recommendation failed; at least one succeeded |
+| `2` | all | Configuration error — nothing was attempted |
+| `3` | `sync`, `login`, `status` | Tidal authentication missing, expired, or not completed |
+| `4` | `sync` | Every recommendation failed |
+| `130` | all | Interrupted (SIGINT) |
+
+`3` covers the whole authentication failure surface: for `sync` a missing or
+expired session, for `login` an authorisation the user never completed or
+refused, for `status` a session that will not authenticate. That last one makes
+`lb2tidal status || lb2tidal login` a valid repair one-liner.
 
 Codes `1` and `4` are distinguished so a systemd `OnFailure=` handler can treat
 partial and total failure differently.
