@@ -145,7 +145,7 @@ lb2tidal/                      # repository root
 │       ├── listenbrainz.py    # LB API client, JSPF parsing
 │       ├── tidal.py           # session lifecycle, search, playlist writes
 │       ├── matching.py        # normalisation + scoring, pure functions
-│       ├── cache.py           # persistent match cache (SQLite)
+│       ├── state.py           # last-synced playlist MBID per recommendation
 │       ├── report.py          # run report model + text/JSON rendering
 │       └── errors.py          # exception hierarchy
 ├── systemd/
@@ -173,7 +173,8 @@ exit-code mapping.
 One `lb2tidal sync` run, through the modules above. Note the two nested loops:
 the outer one runs once per recommendation (3 iterations by default), the inner
 one once per track (~50 iterations) — the inner loop is where nearly all
-wall-clock time and API calls go, which is what §5.3's cache exists to reduce.
+wall-clock time and API calls go, which is why §5.3 skips it wholesale when the
+source playlist has not changed.
 
 ```
 lb2tidal sync
@@ -184,18 +185,18 @@ lb2tidal sync
 │
 ├── for each recommendation:                             ─── outer loop, ×3
 │   │
+│   ├── state.unchanged(name, jspf.mbid)? ──── yes ──→ skip, next recommendation
+│   │
 │   ├── listenbrainz.parse_tracks(jspf)        → [(artist, title), ...]
 │   │
 │   ├── for each (artist, title):                        ─── inner loop, ×50
-│   │   ├── cache.lookup() ──── hit ───────────→ track_id
-│   │   └── miss:
-│   │       ├── tidal.search(query)            → [candidate, ...]
-│   │       ├── matching.best_match(...)       → track_id | None
-│   │       └── cache.store(...)
+│   │   ├── tidal.search(query)                → [candidate, ...]
+│   │   └── matching.best_match(...)           → track_id | None
 │   │                                          ⇒ [track_id, ...] + misses
 │   │
 │   ├── tidal.ensure_playlist(name)            → UserPlaylist
 │   ├── tidal.mirror(playlist, track_ids)      → updated | unchanged | created
+│   ├── state.record(name, jspf.mbid)          ← only after a successful mirror
 │   └── report.add(recommendation, counts, misses)
 │
 └── report.render()                            → stdout (text, or JSON)
@@ -214,8 +215,8 @@ recommendation proceeds (NFR-5). A failure before it — config or authenticatio
 | `tidalapi` | `>=0.8.11,<0.9` | Tidal session, search, playlist operations |
 | `requests` | `>=2.32,<3` | ListenBrainz HTTP client |
 
-Config parsing uses `tomllib` and the match cache uses `sqlite3`, both from the
-standard library — neither adds a dependency.
+Config parsing uses `tomllib` from the standard library; no TOML dependency is
+added.
 
 #### 4.3.2 Development
 
@@ -265,10 +266,9 @@ session_file = "~/.local/state/lb2tidal/tidal.json"
 prefix       = "LB · "        # playlist name prefix
 
 [matching]
-threshold      = 0.62         # minimum score to accept a match, 0.0–1.0
-artist_weight  = 0.4          # title weight is 1 - artist_weight
-search_limit   = 15           # Tidal results considered per query
-cache_ttl_days = 30           # negative-match re-check interval
+threshold     = 0.62          # minimum score to accept a match, 0.0–1.0
+artist_weight = 0.4           # title weight is 1 - artist_weight
+search_limit  = 15            # Tidal results considered per query
 
 [run]
 log_level = "info"            # debug | info | warning | error
@@ -328,31 +328,42 @@ recall. A false positive (wrong track silently added) is worse than a false
 negative (reported miss), so calibration optimises for precision at
 recall ≥ 0.85.
 
-### 5.3 Match cache
+### 5.3 Run state
 
-A SQLite database at `$XDG_STATE_HOME/lb2tidal/cache.db` avoids re-searching
-tracks across runs — significant for `daily-jams`, which overlaps heavily
-day to day.
+ListenBrainz issues a new playlist, with a new MBID, whenever a recommendation is
+regenerated — daily for `daily-jams`, weekly for the others. If the MBID has not
+changed since the last successful sync, nothing upstream has changed and the
+recommendation is skipped without a single Tidal call.
 
-```sql
-CREATE TABLE match_cache (
-    artist_norm  TEXT NOT NULL,
-    title_norm   TEXT NOT NULL,
-    track_id     INTEGER,          -- NULL = known miss
-    score        REAL,
-    resolved_at  TEXT NOT NULL,    -- ISO 8601 UTC
-    PRIMARY KEY (artist_norm, title_norm)
-);
+`$XDG_STATE_HOME/lb2tidal/state.json`:
+
+```json
+{
+  "version": 1,
+  "recommendations": {
+    "weekly-jams":        {"mbid": "a1b2…", "synced_at": "2026-08-24T05:31:12Z"},
+    "weekly-exploration": {"mbid": "c3d4…", "synced_at": "2026-08-24T05:32:40Z"},
+    "daily-jams":         {"mbid": "e5f6…", "synced_at": "2026-08-25T05:31:55Z"}
+  }
+}
 ```
 
-- Positive entries never expire; a Tidal track ID is stable.
-- Negative entries (misses) are re-checked after `cache_ttl_days`, since a track
-  may be added to the Tidal catalogue later.
-- Entries are invalidated wholesale when `threshold`, `artist_weight`, or the
-  normalisation logic changes. A `schema_version` / `matching_version` row in a
-  `meta` table gates this; a version bump clears the table.
-- `--no-cache` bypasses reads and writes for one run.
-- A pure optimisation: deleting the file must only cost time.
+- An entry is written **only after a successful mirror**. A run that fails
+  mid-way leaves the previous entry intact and retries the whole recommendation
+  next time.
+- `--force` ignores the state and re-syncs everything. Needed if the Tidal
+  playlist was edited or deleted by hand, since the state tracks only the
+  ListenBrainz side and cannot know that.
+- Deleting the file costs one redundant sync, nothing more.
+
+**No match cache.** An earlier draft cached `(artist, title) → track_id` in
+SQLite. It was dropped: a run resolves ~130 tracks in 150–250 search requests,
+once a day — no volume worth optimising. Caching the *decision* rather than a
+fact also froze false positives permanently, since re-running a deterministic
+matcher (§5.2) over an unchanged catalogue reproduces the same wrong answer
+forever. Skipping unchanged recommendations removes the redundant work without
+storing any judgement, and every playlist that is actually processed gets a
+fresh match.
 
 ### 5.4 Playlist mirroring
 
@@ -416,6 +427,8 @@ Text rendering (default):
 === daily-jams — Daily Jams for quentin, 2026-08-25
     25 requested · 25 matched · 0 missed
     playlist already up to date
+=== weekly-exploration
+    skipped — source playlist unchanged since 2026-08-24
 ```
 
 JSON rendering (`--json`), the contract for scripting against a run:
@@ -435,7 +448,6 @@ JSON rendering (`--json`), the contract for scripting against a run:
       "requested": 50,
       "matched": 47,
       "missed": 3,
-      "cache_hits": 41,
       "misses": [
         {"artist": "Autechre", "title": "Gantz Graf"},
         {"artist": "Boards of Canada", "title": "Chromakey Dreamcoat"}
@@ -449,16 +461,16 @@ JSON rendering (`--json`), the contract for scripting against a run:
       "requested": 25,
       "matched": 25,
       "missed": 0,
-      "cache_hits": 25,
       "misses": []
     }
   ]
 }
 ```
 
-`status` is one of `updated`, `unchanged`, `created`, or `failed`; a `failed`
-entry carries an `error` string instead of the counters. Under `--dry-run` the
-status is `would-update` / `would-create` and no write occurs.
+`status` is one of `updated`, `unchanged`, `created`, `skipped` (source MBID
+unchanged, §5.3), or `failed`; a `failed` entry carries an `error` string and a
+`skipped` entry omits the counters. Under `--dry-run` the status is
+`would-update` / `would-create` and no write occurs.
 
 `version` is the report schema version, bumped on any breaking change to the
 JSON shape. Under `--json`, only the report goes to stdout — logs go to stderr,
@@ -490,13 +502,14 @@ The default command: `lb2tidal` with no arguments runs this.
 |---|---|
 | `--dry-run` | Resolve and report, write nothing (FR-6) |
 | `--recommendation NAME` | Sync only this recommendation; repeatable |
-| `--no-cache` | Bypass the match cache for this run |
+| `--force` | Ignore run state (§5.3) and re-sync every recommendation |
 | `--json` | Emit the run report as JSON on stdout instead of text |
 
 ### 6.3 `lb2tidal status`
 
 Prints resolved configuration (secrets redacted), Tidal session validity and
-expiry, cache statistics, and the configured recommendations. Makes no writes.
+expiry, the configured recommendations, and each one's last synced MBID and
+timestamp. Makes no writes.
 
 ### 6.4 Exit codes
 
@@ -632,7 +645,7 @@ made public.
   provides `UserPlaylist.add_by_isrc()`. An `MBID → MusicBrainz ISRC → Tidal`
   path would be exact rather than fuzzy, with string matching as fallback.
   Highest-value item on this list; deferred only because it adds a third API
-  dependency with its own rate limits and caching.
+  dependency with its own rate limits.
 - A `--report-misses PATH` flag writing misses to a file for later review.
 - Notification on failure (`OnFailure=` unit sending mail or a webhook).
 
@@ -643,8 +656,7 @@ made public.
 Automated tests cover `matching.py` only. Every other failure mode in this tool
 is loud — a crash, a non-zero exit code, a red line in journald. A matching
 regression is the one that fails silently, by putting the wrong track in a
-playlist, and it is the code most likely to change (§5.3 already anticipates
-invalidating the cache when normalisation logic moves).
+playlist, and normalisation is the logic most likely to be tweaked over time.
 
 `tests/test_matching.py` is table-driven over `tests/corpus.csv`, the same
 labelled set used to calibrate `threshold` (M4). It asserts:
@@ -672,7 +684,7 @@ CI runs `ruff` and `pytest` on Python 3.13, the version shipped by both Debian
 |---|---|---|
 | M1 | Restructure prototype into the §4.1 package | `lb2tidal sync --dry-run` reproduces current behaviour; CI green |
 | M2 | Config, CLI, exit codes, logging | §5.1 and §6 implemented; verified by hand against `status` and `--dry-run` |
-| M3 | Resilience, cache, idempotence | FR-5 verified; a repeat run issues zero writes |
+| M3 | Resilience, run state, idempotence | FR-5 verified; a repeat run issues zero writes and skips unchanged recommendations |
 | M4 | Matching calibration | Precision/recall reported on ≥ 200 labelled pairs |
 | M5 | VPS deployment | Timer running on the Debian 13 host for 7 consecutive days without manual intervention |
 | M6 | README + license | A stranger can install and configure it from the README alone; `LICENSE` present |
