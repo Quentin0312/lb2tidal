@@ -394,39 +394,24 @@ briefly empty. Accepted for v1.0 given overnight scheduling; noted in the README
 
 ### 5.5 Network resilience
 
-Retries are bounded twice: per request, and per recommendation. Neither the
-number of attempts nor the total run time can grow without limit.
+Two limits, so a failing network can never stall a run.
 
-**Per request.** Both clients wrap calls in a shared retry helper: 5 attempts,
-then give up. Between attempts it waits a random duration in `[0, 2ⁿ]` seconds
-(full jitter — the randomness keeps parallel or repeated runs from re-colliding
-on the same second):
-
-| Attempt | Waits up to | Cumulative worst case |
-|---|---|---|
-| 1 | — | 0 s |
-| 2 | 1 s | 1 s |
-| 3 | 2 s | 3 s |
-| 4 | 4 s | 7 s |
-| 5 | 8 s | 15 s |
-
-So one failing request costs at most ~15 s before the failure is reported.
+**A failing request is retried 4 times, then given up on.** The wait doubles each
+time — up to 1 s, 2 s, 4 s, 8 s — with the actual delay drawn at random below
+that ceiling, so repeated runs never retry in lockstep. One failing request
+therefore costs at most ~15 s.
 
 - Retried: connection errors, timeouts, `429`, `5xx`.
-- Not retried: every other `4xx`. A `401` or `404` will not improve by asking again.
-- `Retry-After`, when present, replaces the computed wait — capped at 60 s, so a
-  `Retry-After: 3600` cannot stall the run for an hour.
-- Read timeout 30 s, connect timeout 10 s.
+- Not retried: any other `4xx` — a `401` or `404` will not improve by asking again.
+- A `Retry-After` header replaces the computed wait, capped at 60 s.
+- Timeouts: 10 s to connect, 30 s to read.
 
-**Per recommendation.** After 5 consecutive track resolutions exhaust their
-retries, the service is treated as down: the recommendation is abandoned and
-marked `failed` in the report, and the run moves to the next one (NFR-5).
+**A recommendation is abandoned after 5 tracks fail in a row.** It is marked
+`failed` in the report and the run continues with the next one (NFR-5).
 
-Without this, a Tidal outage would send all ~130 tracks through their own 5
-attempts — roughly 650 doomed requests over ~32 minutes, which would also exceed
-the `TimeoutStartSec=30min` of the systemd unit (§7.3) and get the run killed
-mid-write. With it, the worst case is 3 recommendations × 5 failures × 15 s ≈
-4 minutes before giving up cleanly with a usable report.
+That second limit is what keeps a Tidal outage cheap: without it, all ~130 tracks
+would each burn their own retries, overrunning the unit's `TimeoutStartSec=30min`
+(§7.3). With it, a total outage ends in ~4 minutes with a usable report.
 
 ### 5.6 Logging
 
