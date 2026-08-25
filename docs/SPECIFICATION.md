@@ -717,7 +717,21 @@ non-default alternative for multi-user hosts.
 
 No open decisions block v1.0.
 
-### 8.2 Deferred to post-1.0
+### 8.2 Next up
+
+**Failure notification.** Nothing reports a failed run: the timer fails quietly
+and the operator only finds out by looking. This is the largest operational gap
+now that M5 is running.
+
+Shape: an `OnFailure=lb2tidal-notify@%n.service` on the unit, with a template
+unit that reads the exit code and the last journal lines and sends them
+somewhere. Mail needs an MTA on the host (none installed); a webhook — ntfy,
+Gorify, Discord — avoids that and works from a user unit with no extra
+privileges. Roughly 20 lines of unit plus a small script, and it should
+distinguish exit 1 (partial) from 4 (total), which §6.4 separates precisely so a
+handler can.
+
+### 8.3 Deferred to post-1.0
 
 - Calibration of `artist_weight`, which the current corpus cannot discriminate
   on, and of `threshold` against tracks Tidal genuinely lacks — the reference
@@ -768,14 +782,29 @@ development machine).
 
 ## 10. Milestones
 
-| # | Deliverable | Exit criterion |
+Status as of 2026-08-26.
+
+| # | Deliverable | Status |
 |---|---|---|
-| M1 | Restructure prototype into the §4.1 package | `lb2tidal sync --dry-run` reproduces current behaviour; CI green |
-| M2 | Config, CLI, exit codes, logging | §5.1 and §6 implemented; verified by hand against `status` and `--dry-run` |
-| M3 | Resilience, run state, idempotence | FR-5 verified; a repeat run issues zero writes and skips unchanged recommendations |
-| M4 | Matching calibration | Done 2026-08-26 on 100 live tracks: 100/100 at 1.000, zero false positives (§5.2). Revisit if misses appear in practice |
-| M5 | VPS deployment | Timer running on the Debian 13 host for 7 consecutive days without manual intervention |
-| M6 | README | A stranger can install and configure it from the README alone |
+| M1 | Restructure prototype into the §4.1 package | **done** |
+| M2 | Config, CLI, exit codes, logging | **done** — exit 0/2/3 exercised by hand |
+| M3 | Resilience, run state, idempotence | **done** — FR-5 confirmed on the live account, from both the workstation and the VPS |
+| M4 | Matching calibration | **done** — 100 live tracks, 100/100 at 1.000, zero false positives (§5.2) |
+| M5 | VPS deployment | **running since 2026-08-26.** Timer armed, first sandboxed run succeeded. Needs 7 consecutive days untouched |
+| M6 | README + deployment doc | **done** — `README.md`, `docs/DEPLOYMENT.md` |
+
+### 10.1 Paths never exercised
+
+Everything below has working code and no production evidence:
+
+- **`updated`** — mirroring over an existing playlist whose contents actually
+  differ (`clear()` then `add()`). First real occurrence: Monday 2026-08-31,
+  when ListenBrainz regenerates the weeklies. The only untested write path.
+- **`missed`** — every one of the 100 reference tracks exists on Tidal, so the
+  miss counters, the miss list in the report, and their effect on the exit code
+  have never run for real.
+- **`failed` and the circuit breaker** (§5.5) — needs a Tidal outage.
+- **Retry with backoff** (§5.5) — no `429` or `5xx` has been observed yet.
 
 ---
 

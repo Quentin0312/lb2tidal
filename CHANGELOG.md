@@ -15,6 +15,12 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 - Text and JSON run reports (§5.7).
 - systemd user service and timer.
 
+- `docs/DEPLOYMENT.md`: operating and troubleshooting reference for the VPS.
+
 ### Changed
 
 - Replaced the single-file prototype with a `src/` package.
+- Matching: artist similarity now treats a contained word set as identical, so
+  a dropped collaborator no longer scores like an unrelated artist. Threshold
+  raised from 0.62 to 0.80.
+- Service sandbox allows `AF_UNIX`, without which DNS fails under systemd.
