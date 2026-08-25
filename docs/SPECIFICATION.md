@@ -170,19 +170,40 @@ exit-code mapping.
 
 ### 4.2 Data flow
 
+One `lb2tidal sync` run, through the modules above. Note the two nested loops:
+the outer one runs once per recommendation (3 iterations by default), the inner
+one once per track (~50 iterations) — the inner loop is where nearly all
+wall-clock time and API calls go, which is what §5.3's cache exists to reduce.
+
 ```
-config → listenbrainz.latest_playlists()
-           ↓ [(recommendation, JSPF)]
-         listenbrainz.parse_tracks()
-           ↓ [(artist, title)]
-         cache.lookup() ─── hit ──→ track_id
-           ↓ miss
-         tidal.search() → matching.best_match() → cache.store()
-           ↓ [track_id | None]
-         tidal.ensure_playlist() → tidal.mirror()
-           ↓
-         report → stdout / journald
+lb2tidal sync
+│
+├── config.load()                             → Config
+├── tidal.session()                           → authenticated Session, or exit 3
+├── listenbrainz.latest_playlists(config)     → {recommendation: JSPF}
+│
+├── for each recommendation:                             ─── outer loop, ×3
+│   │
+│   ├── listenbrainz.parse_tracks(jspf)        → [(artist, title), ...]
+│   │
+│   ├── for each (artist, title):                        ─── inner loop, ×50
+│   │   ├── cache.lookup() ──── hit ───────────→ track_id
+│   │   └── miss:
+│   │       ├── tidal.search(query)            → [candidate, ...]
+│   │       ├── matching.best_match(...)       → track_id | None
+│   │       └── cache.store(...)
+│   │                                          ⇒ [track_id, ...] + misses
+│   │
+│   ├── tidal.ensure_playlist(name)            → UserPlaylist
+│   ├── tidal.mirror(playlist, track_ids)      → updated | unchanged | created
+│   └── report.add(recommendation, counts, misses)
+│
+└── report.render()                            → stdout (text, or JSON)
 ```
+
+A failure inside the outer loop is caught, recorded in the report, and the next
+recommendation proceeds (NFR-5). A failure before it — config or authentication
+— aborts the run (exit 2 or 3).
 
 ### 4.3 Dependencies
 
