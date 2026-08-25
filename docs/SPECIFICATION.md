@@ -650,7 +650,7 @@ ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=%h/.local/state/lb2tidal %h/.config/lb2tidal
 PrivateDevices=true
-RestrictAddressFamilies=AF_INET AF_INET6
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallFilter=@system-service
 MemoryDenyWriteExecute=true
 LockPersonality=true
@@ -682,12 +682,17 @@ account's weekly playlists were dated 00:13 and 00:45 UTC. ListenBrainz does not
 publish a schedule, so this is empirical, not guaranteed — but being wrong costs
 nothing, since an early run finds an unchanged MBID and the next day catches up.
 
-Enabling on the VPS:
+`AF_UNIX` is required alongside the internet families: NSS talks to
+`systemd-resolved` over a UNIX socket, so omitting it breaks DNS resolution
+inside the sandbox.
+
+Enabling on the VPS. Note that `pipx install` deploys only the executable, so a
+host installed that way has no copy of these unit files — write them directly:
 
 ```sh
 sudo loginctl enable-linger $USER      # timers run without an active session
 mkdir -p ~/.config/systemd/user
-cp systemd/lb2tidal.{service,timer} ~/.config/systemd/user/
+cp systemd/lb2tidal.{service,timer} ~/.config/systemd/user/   # if the repo is cloned
 systemctl --user daemon-reload
 systemctl --user enable --now lb2tidal.timer
 journalctl --user -u lb2tidal -f

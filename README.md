@@ -70,9 +70,48 @@ way.
 
 ## Run it on a schedule
 
+If you installed with `pipx`, you do not have the unit files locally — write
+them out directly:
+
 ```sh
 mkdir -p ~/.config/systemd/user
-cp systemd/lb2tidal.{service,timer} ~/.config/systemd/user/
+
+cat > ~/.config/systemd/user/lb2tidal.service <<'UNIT'
+[Unit]
+Description=Sync ListenBrainz recommendations to Tidal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/lb2tidal sync
+Nice=10
+TimeoutStartSec=30min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/state/lb2tidal %h/.config/lb2tidal
+PrivateDevices=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallFilter=@system-service
+MemoryDenyWriteExecute=true
+LockPersonality=true
+UNIT
+
+cat > ~/.config/systemd/user/lb2tidal.timer <<'UNIT'
+[Unit]
+Description=Daily ListenBrainz to Tidal sync
+
+[Timer]
+OnCalendar=*-*-* 05:30:00
+RandomizedDelaySec=30m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+
 systemctl --user daemon-reload
 systemctl --user enable --now lb2tidal.timer
 
