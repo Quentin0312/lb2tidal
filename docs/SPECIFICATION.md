@@ -95,9 +95,9 @@ tracks requested, matched, missed, and whether the playlist was written or was
 already up to date. Misses are listed individually. Rendered as text, or as JSON
 under `--json` (§5.7).
 
-**FR-8 — Authentication bootstrap.** A dedicated `login` command performs the Tidal
-OAuth device flow and persists the session, without requiring a local browser or
-a graphical session.
+**FR-8 — First-time authentication.** A dedicated `login` command performs the
+Tidal OAuth device flow and persists the session, without requiring a local
+browser or a graphical session.
 
 ### 3.2 Non-functional
 
@@ -560,13 +560,16 @@ This places `lb2tidal` at `~/.local/bin/lb2tidal`. A plain venv
 (`python3 -m venv ~/.local/share/lb2tidal-venv`) is an equally supported path
 and is documented in `docs/DEPLOYMENT.md`.
 
-### 7.2 Bootstrap
+### 7.2 First-time setup
+
+Run once, after installing. Everything after this is unattended.
 
 ```sh
 mkdir -p ~/.config/lb2tidal && chmod 700 ~/.config/lb2tidal
-$EDITOR ~/.config/lb2tidal/config.toml
-lb2tidal login          # open the printed URL on any device
-lb2tidal sync --dry-run
+$EDITOR ~/.config/lb2tidal/config.toml   # at minimum, set listenbrainz.user
+lb2tidal login                           # open the printed URL on any device
+lb2tidal status                          # confirm the session is valid
+lb2tidal sync --dry-run                  # confirm matching looks sane
 ```
 
 ### 7.3 systemd units
