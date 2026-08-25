@@ -70,6 +70,13 @@ recommendation, its most recently created playlist. Identification uses
 `extension["https://musicbrainz.org/doc/jspf#playlist"].additional_metadata.algorithm_metadata.source_patch`.
 Title-based heuristics are a fallback only and must be logged at `WARNING` when used.
 
+A configured recommendation that the account has no playlist for is reported as
+`not-available` and logged at `WARNING`; it is not a failure and does not affect
+the exit code. ListenBrainz only generates what it has enough listening data
+for — as of 2026-08-25 the reference account has `weekly-jams` and
+`weekly-exploration` but no `daily-jams`. Unknown names are a different matter
+and are rejected at config validation (§5.1).
+
 **FR-2 — Playlist fetch.** For each selected playlist, fetch the full JSPF via
 `GET /1/playlist/{mbid}` and extract the ordered list of `(creator, title)` pairs.
 Tracks with an empty `title` are skipped and counted.
@@ -80,8 +87,10 @@ preserved in the output.
 
 **FR-4 — Playlist mirroring.** For each recommendation, the tool ensures a Tidal
 playlist named `{prefix}{Recommendation Title}` exists, then replaces its
-contents with the resolved track IDs, in order. Playlist description is set from the JSPF `annotation`,
-truncated to 500 characters.
+contents with the resolved track IDs, in order. The playlist description is
+derived from the JSPF `annotation`, which ListenBrainz serves as HTML: tags are
+stripped, entities unescaped, whitespace collapsed, then truncated to 500
+characters.
 
 **FR-5 — Idempotence.** If the resolved track ID list is identical to the current
 playlist contents, the tool must **not** issue any write call. Content comparison
@@ -118,8 +127,9 @@ logged, printed, or included in error output.
 **NFR-5 — Failure isolation.** A failure on one recommendation must not prevent
 the others from syncing. The process exit code reflects the aggregate outcome (§6.4).
 
-**NFR-6 — Portability.** Runs on Python 3.11+ on Debian 13 (Python 3.13) and Arch
-Linux (Python 3.13), on `x86_64` and `aarch64`. No compiled extensions of our own.
+**NFR-6 — Portability.** Runs on Python 3.11+, covering both the deployment
+target (Debian 13, Python 3.13) and the development machine (Arch Linux, Python
+3.14), on `x86_64` and `aarch64`. No compiled extensions of our own.
 
 **NFR-7 — Offline-testable.** The test suite runs with no network access (§9).
 
@@ -142,11 +152,13 @@ lb2tidal/                      # repository root
 │       ├── __main__.py        # python -m lb2tidal
 │       ├── cli.py             # argparse, subcommands, exit codes
 │       ├── config.py          # load + validate + merge config sources
+│       ├── sync.py            # the run itself: resolve tracks, mirror playlists
 │       ├── listenbrainz.py    # LB API client, JSPF parsing
 │       ├── tidal.py           # session lifecycle, search, playlist writes
 │       ├── matching.py        # normalisation + scoring, pure functions
 │       ├── state.py           # last-synced playlist MBID per recommendation
 │       ├── report.py          # run report model + text/JSON rendering
+│       ├── retry.py           # shared bounded-retry helper (§5.5)
 │       └── errors.py          # exception hierarchy
 ├── systemd/
 │   ├── lb2tidal.service
@@ -166,7 +178,8 @@ lb2tidal/                      # repository root
 
 `matching.py` must remain free of I/O so it can be tested exhaustively without
 fixtures. `cli.py` must contain no business logic beyond argument parsing and
-exit-code mapping.
+exit-code mapping — the run itself lives in `sync.py`, which is what §4.2
+describes.
 
 ### 4.2 Data flow
 
@@ -257,9 +270,9 @@ Three layers, later overriding earlier:
 # ~/.config/lb2tidal/config.toml
 
 [listenbrainz]
-user            = "quentin"   # required
+user            = "Cynetiq"   # required
 token           = ""          # optional; needed only for private playlists
-recommendations = ["weekly-jams", "weekly-exploration", "daily-jams"]
+recommendations = ["weekly-jams", "weekly-exploration"]
 
 [tidal]
 session_file = "~/.local/state/lb2tidal/tidal.json"
@@ -286,6 +299,11 @@ Validation is strict: unknown keys in the config file are an error, not a
 warning. `threshold` outside `[0, 1]`, an empty `recommendations` list, or a
 missing `user` abort before any network call with exit code `2`.
 
+`recommendations` entries are checked against the known set — `weekly-jams`,
+`weekly-exploration`, `daily-jams`, `top-discoveries-for-year`,
+`top-missed-recordings-for-year` — so a typo fails loudly at exit 2 instead of
+silently resolving to `not-available` at runtime (FR-1).
+
 A missing config file is not an error: the tool runs from environment variables
 alone.
 
@@ -296,8 +314,10 @@ Normalisation (`matching.normalise`), applied to both candidate and query:
 1. Casefold (`str.casefold()`, not `.lower()`).
 2. Unicode NFKD normalise, then strip combining marks.
 3. Truncate at the first occurrence of any noise marker:
-   `(remaster`, `- remaster`, `(feat.`, `(ft.`, `(live`, `(version`,
-   `(deluxe`, `(bonus`, `(radio edit`, `- radio edit`.
+   `(remaster`, `- remaster`, `(live`, `(version`, `(deluxe`, `(bonus`,
+   `(radio edit`, `- radio edit`, `(feat.`, `(ft.`, and the unparenthesised
+   ` feat. ` / ` ft. ` — ListenBrainz emits credits in that form
+   (`Apashe feat. Alina Pash`), so the parenthesised variants alone miss them.
 4. Drop all characters that are not alphanumeric or whitespace.
 5. Collapse runs of whitespace, strip.
 
@@ -480,7 +500,8 @@ JSON rendering (`--json`), the contract for scripting against a run:
 ```
 
 `status` is one of `updated`, `unchanged`, `created`, `skipped` (source MBID
-unchanged, §5.3), or `failed`; a `failed` entry carries an `error` string and a
+unchanged, §5.3), `not-available` (configured but absent from the account, FR-1),
+or `failed`; a `failed` entry carries an `error` string and a
 `skipped` entry omits the counters. Under `--dry-run` the status is
 `would-update` / `would-create` and no write occurs.
 
@@ -527,7 +548,7 @@ timestamp. Makes no writes.
 
 | Code | Commands | Meaning |
 |---|---|---|
-| `0` | all | Success. For `sync`: every configured recommendation synced, skipped, or already up to date |
+| `0` | all | Success. For `sync`: every configured recommendation synced, skipped, unavailable, or already up to date |
 | `1` | `sync` | At least one recommendation failed; at least one succeeded |
 | `2` | all | Configuration error — nothing was attempted |
 | `3` | `sync`, `login`, `status` | Tidal authentication missing, expired, or not completed |
@@ -626,11 +647,10 @@ thundering herd against the ListenBrainz API.
 Once a day matches the fastest source (`daily-jams`); the weekly recommendations
 are skipped on the other six days at the cost of one `GET` each (§5.3).
 
-**05:30 is a guess.** ListenBrainz does not publish when it regenerates
-recommendations, and this has not been verified. It costs nothing to be wrong —
-an early run simply finds an unchanged MBID and the next day catches up — but
-the hour can be tuned empirically after deployment by comparing the `created_at`
-of the playlists under `createdfor` against the run times in journald.
+05:30 clears the observed generation window: on 2026-08-24 the reference
+account's weekly playlists were dated 00:13 and 00:45 UTC. ListenBrainz does not
+publish a schedule, so this is empirical, not guaranteed — but being wrong costs
+nothing, since an early run finds an unchanged MBID and the next day catches up.
 
 Enabling on the VPS:
 
@@ -665,12 +685,18 @@ No open decisions block v1.0.
 ### 8.2 Deferred to post-1.0
 
 - Calibration of `threshold` against a larger labelled set.
-- **ISRC-based resolution.** ListenBrainz JSPF carries a recording MBID per
-  track, MusicBrainz exposes ISRCs for recordings, and `tidalapi` 0.8.11 already
-  provides `UserPlaylist.add_by_isrc()`. An `MBID → MusicBrainz ISRC → Tidal`
+- **ISRC-based resolution.** Confirmed available: each JSPF track carries its
+  recording MBID in `identifier` (a *list* of MusicBrainz URLs), MusicBrainz
+  exposes ISRCs for recordings, and `tidalapi` 0.8.11 already provides
+  `UserPlaylist.add_by_isrc()`. An `MBID → MusicBrainz ISRC → Tidal`
   path would be exact rather than fuzzy, with string matching as fallback.
   Highest-value item on this list; deferred only because it adds a third API
   dependency with its own rate limits.
+- **Duration as a false-positive guard.** JSPF tracks carry `duration` in
+  milliseconds. A candidate whose length differs by more than ~15% is almost
+  certainly the wrong recording. Deferred rather than added blind: it can only
+  be tuned safely against the M4 corpus, and an uncalibrated filter would trade
+  false positives for false negatives.
 - A `--report-misses PATH` flag writing misses to a file for later review.
 - Notification on failure (`OnFailure=` unit sending mail or a webhook).
 
@@ -698,8 +724,8 @@ Integration testing is manual: `lb2tidal sync --dry-run` against the real
 account. Mocking `tidalapi` would test the mock, not Tidal, and the mock would
 drift from the real API without saying so.
 
-CI runs `ruff` and `pytest` on Python 3.13, the version shipped by both Debian
-13 and Arch.
+CI runs `ruff` and `pytest` on Python 3.13 (the deployment target) and 3.14 (the
+development machine).
 
 ---
 

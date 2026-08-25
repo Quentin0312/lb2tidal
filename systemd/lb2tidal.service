@@ -1,0 +1,23 @@
+[Unit]
+Description=Sync ListenBrainz recommendations to Tidal
+Documentation=https://github.com/Quentin0312/lb2tidal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/lb2tidal sync
+Nice=10
+TimeoutStartSec=30min
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/state/lb2tidal %h/.config/lb2tidal
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_INET6
+SystemCallFilter=@system-service
+MemoryDenyWriteExecute=true
+LockPersonality=true
