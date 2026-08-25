@@ -21,9 +21,9 @@ no observable change in the Tidal account beyond API calls.
 
 In scope for v1.0:
 
-- Fetch the latest recommendation playlist for each configured ListenBrainz source.
+- Fetch the latest playlist for each configured ListenBrainz recommendation.
 - Resolve each `(artist, title)` pair to a Tidal track via search + fuzzy matching.
-- Create or update one Tidal playlist per source, mirroring its contents.
+- Create or update one Tidal playlist per recommendation, mirroring its contents.
 - Run unattended on a headless server on a schedule.
 - Ship as a Python package installable from PyPI-style sources, and as an AUR package.
 
@@ -48,10 +48,10 @@ decisions:
 
 | Term | Meaning |
 |---|---|
-| **Source** | A ListenBrainz recommendation algorithm: `weekly-jams`, `weekly-exploration`, `daily-jams`. Identified by the JSPF `source_patch` field. |
+| **Recommendation** | A ListenBrainz recommendation algorithm: `weekly-jams`, `weekly-exploration`, `daily-jams`. Identified by the JSPF `source_patch` field — the API's own name for it, kept only when referring to that raw field. |
 | **JSPF** | JSON Shareable Playlist Format, the format ListenBrainz serves playlists in. |
 | **Recommendation playlist** | A playlist ListenBrainz generated *for* the user, listed under `/user/{name}/playlists/createdfor`. |
-| **Target playlist** | The Tidal playlist that mirrors a given source. |
+| **Target playlist** | The Tidal playlist that mirrors a given recommendation. |
 | **Match** | A Tidal track judged to correspond to a ListenBrainz `(artist, title)` pair. |
 | **Miss** | A `(artist, title)` pair with no acceptable Tidal match. |
 
@@ -61,9 +61,9 @@ decisions:
 
 ### 3.1 Functional
 
-**FR-1 — Source discovery.** The tool queries
+**FR-1 — Recommendation discovery.** The tool queries
 `GET /1/user/{LB_USER}/playlists/createdfor` and selects, for each configured
-source, the most recently created playlist of that source. Identification uses
+recommendation, its most recently created playlist. Identification uses
 `extension["https://musicbrainz.org/doc/jspf#playlist"].additional_metadata.algorithm_metadata.source_patch`.
 Title-based heuristics are a fallback only and must be logged at `WARNING` when used.
 
@@ -75,9 +75,9 @@ Tracks with an empty `title` are skipped and counted.
 using the matching algorithm in §5.2. Resolution order within a playlist must be
 preserved in the output.
 
-**FR-4 — Playlist mirroring.** For each source, the tool ensures a Tidal playlist
-named `{prefix}{Source Title}` exists, then replaces its contents with the resolved
-track IDs, in order. Playlist description is set from the JSPF `annotation`,
+**FR-4 — Playlist mirroring.** For each recommendation, the tool ensures a Tidal
+playlist named `{prefix}{Recommendation Title}` exists, then replaces its
+contents with the resolved track IDs, in order. Playlist description is set from the JSPF `annotation`,
 truncated to 500 characters.
 
 **FR-5 — Idempotence.** If the resolved track ID list is identical to the current
@@ -87,9 +87,10 @@ is by ordered list of track IDs.
 **FR-6 — Dry run.** `--dry-run` performs all reads and all matching, prints the
 resolution report, and issues zero write calls to Tidal.
 
-**FR-7 — Reporting.** Every run reports, per source: tracks requested, matched,
-missed, and whether the playlist was written or already up to date. Misses are
-listed individually.
+**FR-7 — Reporting.** Every run produces a report covering, per recommendation:
+tracks requested, matched, missed, and whether the playlist was written or was
+already up to date. Misses are listed individually. Rendered as text, or as JSON
+under `--json` (§5.7).
 
 **FR-8 — Authentication bootstrap.** A dedicated `login` command performs the Tidal
 OAuth device flow and persists the session, without requiring a local browser or
@@ -111,8 +112,8 @@ degrade to slowness, not to failure.
 granting full account access. It must be written with mode `0600` and never
 logged, printed, or included in error output.
 
-**NFR-5 — Failure isolation.** A failure on one source must not prevent the other
-sources from syncing. The process exit code reflects the aggregate outcome (§6.4).
+**NFR-5 — Failure isolation.** A failure on one recommendation must not prevent
+the others from syncing. The process exit code reflects the aggregate outcome (§6.4).
 
 **NFR-6 — Portability.** Runs on Python 3.11+ on Debian 13 (Python 3.13) and Arch
 Linux (Python 3.13), on `x86_64` and `aarch64`. No compiled extensions of our own.
@@ -168,7 +169,7 @@ exit-code mapping.
 
 ```
 config → listenbrainz.latest_playlists()
-           ↓ [(source, JSPF)]
+           ↓ [(recommendation, JSPF)]
          listenbrainz.parse_tracks()
            ↓ [(artist, title)]
          cache.lookup() ─── hit ──→ track_id
@@ -194,8 +195,7 @@ Runtime:
 Development: `pytest`, `pytest-cov`, `ruff`, `mypy`. Declared in a
 `[project.optional-dependencies]` `dev` extra. `requirements.txt` stays as the
 frozen, exact-pin dev environment; `pyproject.toml` carries loose ranges for
-distribution. These two must not be conflated — the AUR package uses only
-`pyproject.toml`.
+distribution. The AUR package uses only `pyproject.toml`.
 
 ---
 
@@ -214,9 +214,9 @@ Three layers, later overriding earlier:
 # ~/.config/lb2tidal/config.toml
 
 [listenbrainz]
-user    = "quentin"           # required
-token   = ""                  # optional; needed only for private playlists
-sources = ["weekly-jams", "weekly-exploration", "daily-jams"]
+user            = "quentin"   # required
+token           = ""          # optional; needed only for private playlists
+recommendations = ["weekly-jams", "weekly-exploration", "daily-jams"]
 
 [tidal]
 session_file = "~/.local/state/lb2tidal/tidal.json"
@@ -233,25 +233,25 @@ log_level = "info"            # debug | info | warning | error
 ```
 
 Environment variables: `LB2TIDAL_LB_USER`, `LB2TIDAL_LB_TOKEN`,
-`LB2TIDAL_LB_SOURCES` (comma-separated), `LB2TIDAL_TIDAL_SESSION`,
+`LB2TIDAL_LB_RECOMMENDATIONS` (comma-separated), `LB2TIDAL_TIDAL_SESSION`,
 `LB2TIDAL_PREFIX`, `LB2TIDAL_LOG_LEVEL`.
 
 The prototype's bare `LB_USER`, `LB_TOKEN`, `LB_SOURCES`, `TIDAL_SESSION` and
-`PREFIX` are accepted as deprecated aliases in v1.0 and emit a `WARNING`.
-They are removed in v2.0.
+`PREFIX` are accepted as deprecated aliases in v1.0 and emit a `WARNING`
+(`LB_SOURCES` maps to `recommendations`). They are removed in v2.0.
 
 Validation is strict: unknown keys in the config file are an error, not a
-warning. `threshold` outside `[0, 1]`, an empty `sources` list, or a missing
-`user` abort before any network call with exit code `2`.
+warning. `threshold` outside `[0, 1]`, an empty `recommendations` list, or a
+missing `user` abort before any network call with exit code `2`.
 
-If no config file exists, the tool still runs from environment variables alone;
-a missing config file is not an error.
+A missing config file is not an error: the tool runs from environment variables
+alone.
 
 ### 5.2 Matching algorithm
 
 Normalisation (`matching.normalise`), applied to both candidate and query:
 
-1. Casefold (`str.casefold()`, not `.lower()` — correct for non-ASCII).
+1. Casefold (`str.casefold()`, not `.lower()`).
 2. Unicode NFKD normalise, then strip combining marks.
 3. Truncate at the first occurrence of any noise marker:
    `(remaster`, `- remaster`, `(feat.`, `(ft.`, `(live`, `(version`,
@@ -273,11 +273,10 @@ Query strategy, first acceptable match wins:
 1. `"{artist} {title}"`
 2. `"{title}"` — only if step 1 produced nothing above threshold.
 
-A candidate is accepted when `score >= threshold`. On ties, the higher-scoring
-candidate wins; on exact score ties, the first returned by Tidal wins
-(Tidal's own relevance ordering is the tiebreaker).
+The highest-scoring candidate at or above `threshold` wins. Ties are broken by
+Tidal's own result ordering: first returned wins.
 
-Matching is deterministic: same inputs, same output, no time or randomness.
+Matching is deterministic.
 
 **Rationale for the defaults.** `threshold = 0.62` and `artist_weight = 0.4` are
 inherited from the prototype and are unvalidated. Before v1.0 they must be
@@ -311,15 +310,15 @@ CREATE TABLE match_cache (
   normalisation logic changes. A `schema_version` / `matching_version` row in a
   `meta` table gates this; a version bump clears the table.
 - `--no-cache` bypasses reads and writes for one run.
-- The cache is a pure optimisation. Deleting the file must only cost time.
+- A pure optimisation: deleting the file must only cost time.
 
 ### 5.4 Playlist mirroring
 
-Target playlist name: `{prefix}{source with hyphens replaced by spaces, title-cased}`
+Target playlist name: `{prefix}{recommendation with hyphens replaced by spaces, title-cased}`
 — e.g. `LB · Weekly Jams`.
 
 Lookup is by exact name among the user's own playlists. If two playlists share
-the name, the tool aborts that source with an error rather than guessing.
+the name, the tool aborts that recommendation with an error rather than guessing.
 
 Write procedure:
 
@@ -330,13 +329,10 @@ Write procedure:
 3. Otherwise `UserPlaylist.clear()`, then `add()` the resolved IDs in chunks of
    50, preserving order.
 
-The clear-then-add window leaves the playlist briefly empty. This is accepted
-for v1.0: runs are scheduled overnight and Tidal offers no atomic replace. It
-must be noted in the README.
+Tidal offers no atomic replace, so the clear-then-add window leaves the playlist
+briefly empty. Accepted for v1.0 given overnight scheduling; noted in the README.
 
-**Mirror is the only mode.** No dated snapshots, no append-only accumulation.
-Tracks that drop out of a ListenBrainz recommendation drop out of the Tidal
-playlist.
+**Mirror is the only mode** — no dated snapshots, no append-only accumulation.
 
 ### 5.5 Network resilience
 
@@ -349,10 +345,13 @@ Both clients wrap calls in a shared retry helper:
 - Never retry `4xx` other than `429`.
 - Read timeout 30 s, connect timeout 10 s.
 
-A run that exhausts retries for one source records the failure and continues to
-the next source (NFR-5).
+A run that exhausts retries for one recommendation records the failure and
+continues to the next one (NFR-5).
 
 ### 5.6 Logging
+
+Logging is the event stream emitted *during* processing; the run report (§5.7)
+is the summary emitted *after* every recommendation has been processed.
 
 Structured, level-prefixed lines on stdout; errors on stderr. No colour when
 stdout is not a TTY (so journald output stays clean). No timestamps in the
@@ -360,6 +359,68 @@ output — journald adds its own; `--timestamps` re-enables them for cron users.
 
 The Tidal session file path may be logged; its contents must never be. The
 ListenBrainz token must never be logged, including inside request URLs.
+
+### 5.7 Run report
+
+Text rendering (default):
+
+```
+=== weekly-jams — Weekly Jams for quentin, week of 2026-08-24
+    50 requested · 47 matched · 3 missed
+    playlist updated: LB · Weekly Jams
+    misses:
+      Autechre — Gantz Graf
+      Boards of Canada — Chromakey Dreamcoat
+=== daily-jams — Daily Jams for quentin, 2026-08-25
+    25 requested · 25 matched · 0 missed
+    playlist already up to date
+```
+
+JSON rendering (`--json`), the contract for scripting against a run:
+
+```json
+{
+  "version": 1,
+  "started_at": "2026-08-25T05:31:12Z",
+  "finished_at": "2026-08-25T05:33:48Z",
+  "exit_code": 0,
+  "recommendations": [
+    {
+      "name": "weekly-jams",
+      "playlist_title": "Weekly Jams for quentin, week of 2026-08-24",
+      "target": "LB · Weekly Jams",
+      "status": "updated",
+      "requested": 50,
+      "matched": 47,
+      "missed": 3,
+      "cache_hits": 41,
+      "misses": [
+        {"artist": "Autechre", "title": "Gantz Graf"},
+        {"artist": "Boards of Canada", "title": "Chromakey Dreamcoat"}
+      ]
+    },
+    {
+      "name": "daily-jams",
+      "playlist_title": "Daily Jams for quentin, 2026-08-25",
+      "target": "LB · Daily Jams",
+      "status": "unchanged",
+      "requested": 25,
+      "matched": 25,
+      "missed": 0,
+      "cache_hits": 25,
+      "misses": []
+    }
+  ]
+}
+```
+
+`status` is one of `updated`, `unchanged`, `created`, or `failed`; a `failed`
+entry carries an `error` string instead of the counters. Under `--dry-run` the
+status is `would-update` / `would-create` and no write occurs.
+
+`version` is the report schema version, bumped on any breaking change to the
+JSON shape. Under `--json`, only the report goes to stdout — logs go to stderr,
+so the output stays pipeable into `jq`.
 
 ---
 
@@ -381,31 +442,29 @@ Refuses to overwrite an existing valid session unless `--force` is given.
 
 ### 6.2 `lb2tidal sync`
 
-The default command; `lb2tidal` with no arguments is equivalent to
-`lb2tidal sync`.
+The default command: `lb2tidal` with no arguments runs this.
 
 | Flag | Effect |
 |---|---|
 | `--dry-run` | Resolve and report, write nothing (FR-6) |
-| `--source NAME` | Sync only this source; repeatable |
+| `--recommendation NAME` | Sync only this recommendation; repeatable |
 | `--no-cache` | Bypass the match cache for this run |
 | `--json` | Emit the run report as JSON on stdout instead of text |
 
 ### 6.3 `lb2tidal status`
 
 Prints resolved configuration (secrets redacted), Tidal session validity and
-expiry, cache statistics, and the configured sources. Makes no writes. Intended
-as the first thing to run when something is wrong.
+expiry, cache statistics, and the configured recommendations. Makes no writes.
 
 ### 6.4 Exit codes
 
 | Code | Meaning |
 |---|---|
-| `0` | All configured sources synced successfully (or already up to date) |
-| `1` | At least one source failed; at least one succeeded |
+| `0` | All configured recommendations synced successfully (or already up to date) |
+| `1` | At least one recommendation failed; at least one succeeded |
 | `2` | Configuration error — nothing was attempted |
 | `3` | Tidal authentication missing or expired — run `lb2tidal login` |
-| `4` | All sources failed |
+| `4` | All recommendations failed |
 | `130` | Interrupted (SIGINT) |
 
 Codes `1` and `4` are distinguished so a systemd `OnFailure=` handler can treat
@@ -502,8 +561,8 @@ journalctl --user -u lb2tidal -f
 ```
 
 A system-level variant (dedicated `lb2tidal` user, `StateDirectory=`,
-`ConfigurationDirectory=`) is documented in `docs/DEPLOYMENT.md` as an
-alternative for multi-user hosts. It is not the default.
+`ConfigurationDirectory=`) is documented in `docs/DEPLOYMENT.md` as a
+non-default alternative for multi-user hosts.
 
 ---
 
@@ -594,12 +653,11 @@ which constrains the license decision in §9.1.
 
 ### 9.1 TODO — blocking release
 
-- **License.** Undecided. Required by both the AUR (`license=()` field,
-  `/usr/share/licenses/`) and by publishing at all. MIT and GPL-3.0 are the
-  candidates. `tidalapi` is confirmed LGPL-3.0 (§8.2.1); since we import it as a
-  library rather than modify it, both MIT and GPL-3.0 are compatible, so this
-  stays a free choice. Every `TODO §9.1` placeholder in this document
-  and in `PKGBUILD`, `pyproject.toml` and the systemd units depends on this.
+- **License.** Undecided; MIT and GPL-3.0 are the candidates. Required by the
+  AUR (`license=()`, `/usr/share/licenses/`). `tidalapi` is LGPL-3.0 (§8.2.1),
+  but we import it rather than modify it, so both candidates are compatible —
+  the choice is free. Every `TODO §9.1` placeholder in this document and in
+  `PKGBUILD`, `pyproject.toml` and the systemd units depends on it.
 - **Hosting.** Undecided (GitHub / Codeberg / self-hosted). Determines the
   `source=()` URL in `PKGBUILD`, `Documentation=` in the unit file, and the
   `[project.urls]` metadata. The AUR requires a stable, publicly fetchable
@@ -609,13 +667,11 @@ which constrains the license decision in §9.1.
 
 - Calibration of `threshold` against a larger labelled set.
 - **ISRC-based resolution.** ListenBrainz JSPF carries a recording MBID per
-  track, and MusicBrainz exposes ISRCs for recordings; `tidalapi` 0.8.11 already
-  provides `UserPlaylist.add_by_isrc()`. An
-  `MBID → MusicBrainz ISRC → Tidal` path would be exact rather than fuzzy, with
-  string matching kept only as the fallback. This is the single highest-value
-  improvement available and should be the first post-1.0 item — it is deferred
-  only because it adds a third API dependency (MusicBrainz) and its own rate
-  limits and caching concerns.
+  track, MusicBrainz exposes ISRCs for recordings, and `tidalapi` 0.8.11 already
+  provides `UserPlaylist.add_by_isrc()`. An `MBID → MusicBrainz ISRC → Tidal`
+  path would be exact rather than fuzzy, with string matching as fallback.
+  Highest-value item on this list; deferred only because it adds a third API
+  dependency with its own rate limits and caching.
 - A `--report-misses PATH` flag writing misses to a file for later review.
 - Notification on failure (`OnFailure=` unit sending mail or a webhook).
 
@@ -626,7 +682,7 @@ which constrains the license decision in §9.1.
 | Layer | Approach |
 |---|---|
 | `matching.py` | Pure unit tests, table-driven, including non-ASCII (accents, CJK), noise markers, and known false-positive pairs from calibration. |
-| `listenbrainz.py` | Recorded JSPF fixtures; assert source detection, fallback path, malformed-payload handling. |
+| `listenbrainz.py` | Recorded JSPF fixtures; assert recommendation detection, fallback path, malformed-payload handling. |
 | `tidal.py` | `tidalapi` fully mocked; assert idempotence (FR-5 issues zero writes), chunking at 50, order preservation, pagination of existing tracks. |
 | `config.py` | Precedence (file < env < flag), strict unknown-key rejection, deprecated-alias warnings, validation failures → exit 2. |
 | `cache.py` | Hit/miss, negative-entry TTL expiry, invalidation on matching-version bump. |
@@ -681,7 +737,8 @@ carry these forward; they double as regression-test cases.
    look like an empty catalogue.
 9. **No retry or backoff.** A single `429` or transient `5xx` aborts the run.
 10. **Unpaginated LB fetch.** `createdfor` is requested with `count=50` and no
-    offset; the "most recent per source" assumption is undocumented and unverified.
+    offset; the "most recent per recommendation" assumption is undocumented and
+    unverified.
 11. **`.lower()` on non-ASCII.** Should be `.casefold()`, and accents should be
     folded — "Beyoncé" vs "Beyonce" currently scores below an exact match.
 12. **Module-level config.** Environment is read at import time into globals,
