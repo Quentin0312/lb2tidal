@@ -207,19 +207,37 @@ recommendation proceeds (NFR-5). A failure before it — config or authenticatio
 
 ### 4.3 Dependencies
 
-Runtime:
+#### 4.3.1 Runtime
 
 | Package | Constraint | Role |
 |---|---|---|
 | `tidalapi` | `>=0.8.11,<0.9` | Tidal session, search, playlist operations |
 | `requests` | `>=2.32,<3` | ListenBrainz HTTP client |
 
-`tomllib` (stdlib, 3.11+) parses config; no TOML dependency is added.
+Config parsing uses `tomllib` and the match cache uses `sqlite3`, both from the
+standard library — neither adds a dependency.
 
-Development: `pytest` and `ruff`, declared in a
-`[project.optional-dependencies]` `dev` extra. `requirements.txt` stays as the
-frozen, exact-pin dev environment; `pyproject.toml` carries loose ranges for
-installation.
+#### 4.3.2 Development
+
+`pytest` and `ruff`, declared in a `[project.optional-dependencies]` `dev` extra.
+
+Two files, two jobs, not interchangeable:
+
+| File | Contents | Consumed by |
+|---|---|---|
+| `pyproject.toml` | loose ranges, as above | installation (`pipx`, `pip`) |
+| `requirements.txt` | exact pins of the working dev environment | reproducing the dev venv |
+
+#### 4.3.3 Rejected dependencies
+
+**A ListenBrainz client library.** `liblistenbrainz` (0.7.0, Feb 2026 — the
+maintained successor to the dead `pylistenbrainz`) covers listens, stats and
+feedback. It implements neither `/1/user/{u}/playlists/createdfor` nor
+`/1/playlist/{mbid}`, and contains no playlist or JSPF handling at all. Adopting
+it would add a dependency while still requiring raw `requests` for the two calls
+we actually make. Both are plain JSON `GET`s — authenticated only when
+`listenbrainz.token` is set, for private playlists — so `listenbrainz.py`
+implements them directly.
 
 ---
 
