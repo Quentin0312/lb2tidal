@@ -367,6 +367,11 @@ fresh match.
 
 ### 5.4 Playlist mirroring
 
+Mirroring runs once per `sync` invocation, i.e. once a day under the timer of
+§7.3. There is no polling: ListenBrainz regenerates a recommendation on its own
+schedule (daily for `daily-jams`, weekly for the others), and §5.3 skips any
+recommendation whose playlist MBID has not moved since the last sync.
+
 Target playlist name: `{prefix}{recommendation with hyphens replaced by spaces, title-cased}`
 — e.g. `LB · Weekly Jams`.
 
@@ -601,8 +606,16 @@ WantedBy=timers.target
 ```
 
 `Persistent=true` catches up after downtime; `RandomizedDelaySec` avoids a
-thundering herd against the ListenBrainz API. 05:30 local is after ListenBrainz
-generates `daily-jams`; the exact hour is documented as user-tunable.
+thundering herd against the ListenBrainz API.
+
+Once a day matches the fastest source (`daily-jams`); the weekly recommendations
+are skipped on the other six days at the cost of one `GET` each (§5.3).
+
+**05:30 is a guess.** ListenBrainz does not publish when it regenerates
+recommendations, and this has not been verified. It costs nothing to be wrong —
+an early run simply finds an unchanged MBID and the next day catches up — but
+the hour can be tuned empirically after deployment by comparing the `created_at`
+of the playlists under `createdfor` against the run times in journald.
 
 Enabling on the VPS:
 
