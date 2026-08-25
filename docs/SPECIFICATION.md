@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Date:** 2026-08-25
-**Target:** v1.0.0 — first release published to the AUR
+**Target:** v1.0.0 — unattended personal deployment on a Debian 13 VPS
 
 ---
 
@@ -25,7 +25,8 @@ In scope for v1.0:
 - Resolve each `(artist, title)` pair to a Tidal track via search + fuzzy matching.
 - Create or update one Tidal playlist per recommendation, mirroring its contents.
 - Run unattended on a headless server on a schedule.
-- Ship as a Python package installable from PyPI-style sources, and as an AUR package.
+- Ship as a Python package installable with `pipx` straight from the git
+  repository, with the README as the install guide.
 
 ### 1.2 Non-goals
 
@@ -41,6 +42,8 @@ decisions:
 - Multi-account or multi-user operation in a single process.
 - Preserving history: playlists are mirrored, not archived (see §5.4).
 - Downloading, caching, or handling audio data of any kind.
+- **Distribution packaging** — PyPI upload. The project has one
+  user; anyone else follows the README. Revisit only if that changes.
 
 ---
 
@@ -118,7 +121,7 @@ the others from syncing. The process exit code reflects the aggregate outcome (�
 **NFR-6 — Portability.** Runs on Python 3.11+ on Debian 13 (Python 3.13) and Arch
 Linux (Python 3.13), on `x86_64` and `aarch64`. No compiled extensions of our own.
 
-**NFR-7 — Offline-testable.** The full test suite runs with no network access.
+**NFR-7 — Offline-testable.** The test suite runs with no network access (§9).
 
 ---
 
@@ -144,21 +147,16 @@ lb2tidal/
 │   ├── lb2tidal.service
 │   └── lb2tidal.timer
 ├── tests/
-│   ├── fixtures/              # recorded JSPF + Tidal search payloads
-│   ├── test_matching.py
-│   ├── test_listenbrainz.py
-│   ├── test_config.py
-│   └── test_sync.py
+│   ├── corpus.csv             # labelled (artist, title) → Tidal track pairs
+│   └── test_matching.py
 ├── docs/
 │   ├── SPECIFICATION.md       # this file
 │   └── DEPLOYMENT.md
-├── packaging/
-│   └── aur/PKGBUILD
 ├── pyproject.toml
 ├── requirements.txt           # frozen dev environment
-├── README.md
+├── README.md                  # install + configuration guide
 ├── CHANGELOG.md
-└── LICENSE                    # TODO — see §9.1
+└── LICENSE                    # TODO — see §8.1
 ```
 
 `matching.py` must remain free of I/O so it can be tested exhaustively without
@@ -192,10 +190,10 @@ Runtime:
 
 `tomllib` (stdlib, 3.11+) parses config; no TOML dependency is added.
 
-Development: `pytest`, `pytest-cov`, `ruff`, `mypy`. Declared in a
+Development: `pytest` and `ruff`, declared in a
 `[project.optional-dependencies]` `dev` extra. `requirements.txt` stays as the
 frozen, exact-pin dev environment; `pyproject.toml` carries loose ranges for
-distribution. The AUR package uses only `pyproject.toml`.
+installation.
 
 ---
 
@@ -481,7 +479,7 @@ into the system interpreter is refused. Install into an isolated environment.
 
 ```sh
 sudo apt install pipx
-pipx install git+https://github.com/<owner>/lb2tidal@v1.0.0   # TODO §9.1
+pipx install git+https://github.com/<owner>/lb2tidal@v1.0.0   # TODO §8.1
 ```
 
 This places `lb2tidal` at `~/.local/bin/lb2tidal`. A plain venv
@@ -566,104 +564,23 @@ non-default alternative for multi-user hosts.
 
 ---
 
-## 8. Packaging — AUR
+## 8. Open decisions
 
-### 8.1 Package
+### 8.1 Open TODOs
 
-- Name: `lb2tidal`
-- Also publish `lb2tidal-git` tracking `main`, once the stable package is accepted.
-- Built with `python-build` / `python-installer` from a tagged release tarball
-  fetched over HTTPS, with `sha256sums` pinned.
+Neither blocks the VPS deployment; both are needed before the repository is
+made public.
 
-### 8.2 Dependency status — verified 2026-08-25
-
-Checked against the AUR RPC v5 API and the official Arch package database.
-
-| Dependency | Source | Status |
-|---|---|---|
-| `python` | `core` | OK |
-| `python-requests` | `extra` 2.34.2 | OK |
-| `python-tidalapi` | **does not exist** | **Blocker — see §8.2.1** |
-| `python-build`, `python-installer`, `python-hatchling` | `extra` | `makedepends`, OK |
-| `python-pytest` | `extra` | `checkdepends`, OK |
-
-#### 8.2.1 `python-tidalapi` is not packaged
-
-There is no stable `python-tidalapi` in the AUR. The only candidate is
-`python-tidalapi-git` (maintainer `teraflops`, 0 votes, popularity 0, last
-modified 2025-10-18, `pkgver` 0.8.8.r0.g29d5153). It `provides=('python-tidalapi')`,
-so it would technically satisfy the dependency — but it is not usable as-is:
-
-- **Its `depends` array is wrong.** It declares only `depends=('python')`. The
-  actual runtime requirements — `requests`, `mpegdash`, `ratelimit`, `isodate`,
-  `pyaes`, `python-dateutil`, `typing_extensions` — are all missing, so the
-  installed package imports successfully only if those happen to be present for
-  other reasons. `namcap` would flag this.
-- **It is a VCS package.** It tracks `main`, so its version is whatever HEAD was
-  at build time. A stable release cannot depend on a moving target, and §8.4
-  requires a `pkgver` matching a tag.
-- **It lags upstream.** 0.8.8 against our pinned 0.8.11.
-- **It is effectively unmaintained.** Zero votes, zero popularity.
-
-**Decision: package `python-tidalapi` ourselves and submit it first.** It is a
-pure-Python `python-build`/`python-installer` package, so the PKGBUILD is
-short; the work is in declaring the dependency set correctly. `lb2tidal` then
-depends on a stable, correctly-specified package we control. This adds one AUR
-package to maintain and must be sequenced ahead of milestone M6.
-
-Its transitive dependencies, checked:
-
-| Package | Source | Note |
-|---|---|---|
-| `python-requests` | `extra` 2.34.2 | OK |
-| `python-mpegdash` | `extra` 0.4.1 | OK |
-| `python-isodate` | `extra` 0.7.2 | OK |
-| `python-pyaes` | `extra` 1.6.1 | OK |
-| `python-dateutil` | `extra` 2.9.0 | OK |
-| `python-typing_extensions` | `extra` 4.16.0 | OK |
-| `python-ratelimit` | **AUR only** — 2.2.1-1, maintainer `thrasibule`, last modified 2021-11-19 | Acceptable: 2.2.1 is the current upstream release, so the age reflects a dormant upstream, not a stale package. Monitor it; be ready to adopt if it is orphaned. |
-
-Only `python-ratelimit` sits outside the official repositories, and an AUR
-package may depend on another AUR package. Note that `tidalapi` is **LGPL-3.0**,
-which constrains the license decision in §9.1.
-
-### 8.3 Installed files
-
-| Path | Content |
-|---|---|
-| `/usr/bin/lb2tidal` | entry point |
-| `/usr/lib/python3.13/site-packages/lb2tidal/` | package |
-| `/usr/lib/systemd/user/lb2tidal.{service,timer}` | user units |
-| `/usr/share/doc/lb2tidal/config.toml.example` | commented example config |
-| `/usr/share/licenses/lb2tidal/LICENSE` | required by Arch packaging policy |
-
-### 8.4 Compliance checklist
-
-- `namcap` clean on both `PKGBUILD` and the built package.
-- Builds in a clean chroot (`extra-x86_64-build`).
-- `pkgver` matches the upstream git tag exactly; no `-git` suffix on the stable package.
-- `check()` runs the offline test suite.
-- No files installed outside the paths above; no post-install network access.
-- `.SRCINFO` regenerated and committed alongside every `PKGBUILD` change.
-- Package installs nothing into `/etc` and creates no system user.
-
----
-
-## 9. Open decisions
-
-### 9.1 TODO — blocking release
-
-- **License.** Undecided; MIT and GPL-3.0 are the candidates. Required by the
-  AUR (`license=()`, `/usr/share/licenses/`). `tidalapi` is LGPL-3.0 (§8.2.1),
-  but we import it rather than modify it, so both candidates are compatible —
-  the choice is free. Every `TODO §9.1` placeholder in this document and in
-  `PKGBUILD`, `pyproject.toml` and the systemd units depends on it.
+- **License.** Undecided; MIT and GPL-3.0 are the candidates. `tidalapi` is
+  LGPL-3.0, but we import it rather than modify it, so both are compatible —
+  the choice is free. Needed for `LICENSE`, the `license` field in
+  `pyproject.toml`, and for anyone else to legally use the code.
 - **Hosting.** Undecided (GitHub / Codeberg / self-hosted). Determines the
-  `source=()` URL in `PKGBUILD`, `Documentation=` in the unit file, and the
-  `[project.urls]` metadata. The AUR requires a stable, publicly fetchable
-  release tarball URL.
+  `pipx install git+<url>` command in the README, `Documentation=` in the
+  systemd unit, and `[project.urls]`. Any git remote reachable over HTTPS works
+  — no release tarball needed.
 
-### 9.2 Deferred to post-1.0
+### 8.2 Deferred to post-1.0
 
 - Calibration of `threshold` against a larger labelled set.
 - **ISRC-based resolution.** ListenBrainz JSPF carries a recording MBID per
@@ -677,40 +594,51 @@ which constrains the license decision in §9.1.
 
 ---
 
-## 10. Testing
+## 9. Testing
 
-| Layer | Approach |
-|---|---|
-| `matching.py` | Pure unit tests, table-driven, including non-ASCII (accents, CJK), noise markers, and known false-positive pairs from calibration. |
-| `listenbrainz.py` | Recorded JSPF fixtures; assert recommendation detection, fallback path, malformed-payload handling. |
-| `tidal.py` | `tidalapi` fully mocked; assert idempotence (FR-5 issues zero writes), chunking at 50, order preservation, pagination of existing tracks. |
-| `config.py` | Precedence (file < env < flag), strict unknown-key rejection, deprecated-alias warnings, validation failures → exit 2. |
-| `cache.py` | Hit/miss, negative-entry TTL expiry, invalidation on matching-version bump. |
-| End-to-end | `--dry-run` against fixtures, asserting the rendered report. |
+Automated tests cover `matching.py` only. Every other failure mode in this tool
+is loud — a crash, a non-zero exit code, a red line in journald. A matching
+regression is the one that fails silently, by putting the wrong track in a
+playlist, and it is the code most likely to change (§5.3 already anticipates
+invalidating the cache when normalisation logic moves).
 
-No test may touch the network. CI runs `ruff`, `mypy`, and `pytest` on Python
-3.11, 3.12 and 3.13.
+`tests/test_matching.py` is table-driven over `tests/corpus.csv`, the same
+labelled set used to calibrate `threshold` (M4). It asserts:
+
+- Normalisation output for accents, casefolding, CJK, and each noise marker.
+- That every labelled pair resolves to its expected track at the configured
+  threshold, and that known false-positive pairs stay below it.
+- Determinism and tie-breaking order.
+
+`matching.py` is free of I/O (§4.1), so these tests need no mocks, fixtures, or
+network.
+
+Integration testing is manual: `lb2tidal sync --dry-run` against the real
+account. Mocking `tidalapi` would test the mock, not Tidal, and the mock would
+drift from the real API without saying so.
+
+CI runs `ruff` and `pytest` on Python 3.13, the version shipped by both Debian
+13 and Arch.
 
 ---
 
-## 11. Milestones
+## 10. Milestones
 
 | # | Deliverable | Exit criterion |
 |---|---|---|
 | M1 | Restructure prototype into the §4.1 package | `lb2tidal sync --dry-run` reproduces current behaviour; CI green |
-| M2 | Config, CLI, exit codes, logging | §5.1 and §6 fully implemented and tested |
+| M2 | Config, CLI, exit codes, logging | §5.1 and §6 implemented; verified by hand against `status` and `--dry-run` |
 | M3 | Resilience, cache, idempotence | FR-5 verified; a repeat run issues zero writes |
 | M4 | Matching calibration | Precision/recall reported on ≥ 200 labelled pairs |
 | M5 | VPS deployment | Timer running on the Debian 13 host for 7 consecutive days without manual intervention |
-| M6a | `python-tidalapi` submitted to the AUR | Stable release package with correct `depends`, `namcap` clean (§8.2.1) |
-| M6b | `lb2tidal` AUR submission | License chosen, clean-chroot build, `namcap` clean, package accepted |
+| M6 | README + license | A stranger can install and configure it from the README alone; `LICENSE` present |
 
 ---
 
 ## Appendix A — Defects in the prototype
 
 Found while reading `lb2tidal.py` (commit `cc84f59`). The v1.0 rewrite must not
-carry these forward; they double as regression-test cases.
+carry these forward.
 
 1. **`annotation` crash.** `pl.get("annotation", "")[:400]` raises `TypeError`
    when the key exists with a `null` value — `dict.get` returns the default only
@@ -742,4 +670,4 @@ carry these forward; they double as regression-test cases.
 11. **`.lower()` on non-ASCII.** Should be `.casefold()`, and accents should be
     folded — "Beyoncé" vs "Beyonce" currently scores below an exact match.
 12. **Module-level config.** Environment is read at import time into globals,
-    making the module untestable without monkeypatching the environment.
+    so configuration cannot change without reimporting the module.
