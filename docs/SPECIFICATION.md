@@ -161,7 +161,7 @@ lb2tidal/                      # repository root
 ├── requirements.txt           # frozen dev environment
 ├── README.md                  # install + configuration guide
 ├── CHANGELOG.md
-└── LICENSE                    # TODO — see §8.1
+└── LICENSE                    # MIT
 ```
 
 `matching.py` must remain free of I/O so it can be tested exhaustively without
@@ -553,7 +553,7 @@ into the system interpreter is refused. Install into an isolated environment.
 
 ```sh
 sudo apt install pipx
-pipx install git+https://github.com/<owner>/lb2tidal@v1.0.0   # TODO §8.1
+pipx install git+https://github.com/Quentin0312/lb2tidal@v1.0.0
 ```
 
 This places `lb2tidal` at `~/.local/bin/lb2tidal`. A plain venv
@@ -582,7 +582,7 @@ own session file, with no system user to provision.
 ```ini
 [Unit]
 Description=Sync ListenBrainz recommendations to Tidal
-Documentation=https://github.com/<owner>/lb2tidal
+Documentation=https://github.com/Quentin0312/lb2tidal
 After=network-online.target
 Wants=network-online.target
 
@@ -651,19 +651,16 @@ non-default alternative for multi-user hosts.
 
 ## 8. Open decisions
 
-### 8.1 Open TODOs
+### 8.1 Settled
 
-Neither blocks the VPS deployment; both are needed before the repository is
-made public.
+- **License:** MIT, `LICENSE` at the repository root, `license = "MIT"` in
+  `pyproject.toml`. `tidalapi` is LGPL-3.0, which constrains nothing here: we
+  import it as a library rather than modify it.
+- **Hosting:** GitHub, `https://github.com/Quentin0312/lb2tidal`. Installation is
+  `pipx install git+<that URL>@<tag>` (§7.1); releases are git tags, with no
+  tarball or registry upload involved.
 
-- **License.** Undecided; MIT and GPL-3.0 are the candidates. `tidalapi` is
-  LGPL-3.0, but we import it rather than modify it, so both are compatible —
-  the choice is free. Needed for `LICENSE`, the `license` field in
-  `pyproject.toml`, and for anyone else to legally use the code.
-- **Hosting.** Undecided (GitHub / Codeberg / self-hosted). Determines the
-  `pipx install git+<url>` command in the README, `Documentation=` in the
-  systemd unit, and `[project.urls]`. Any git remote reachable over HTTPS works
-  — no release tarball needed.
+No open decisions block v1.0.
 
 ### 8.2 Deferred to post-1.0
 
@@ -715,7 +712,7 @@ CI runs `ruff` and `pytest` on Python 3.13, the version shipped by both Debian
 | M3 | Resilience, run state, idempotence | FR-5 verified; a repeat run issues zero writes and skips unchanged recommendations |
 | M4 | Matching calibration | Precision/recall reported on ≥ 200 labelled pairs |
 | M5 | VPS deployment | Timer running on the Debian 13 host for 7 consecutive days without manual intervention |
-| M6 | README + license | A stranger can install and configure it from the README alone; `LICENSE` present |
+| M6 | README | A stranger can install and configure it from the README alone |
 
 ---
 
